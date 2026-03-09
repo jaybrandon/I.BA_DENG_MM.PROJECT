@@ -1,0 +1,18 @@
+[project]
+name = "i-ba-deng-mm-project"
+version = "0.1.0"
+description = "DENG Project"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "click>=8.3.1",
+    "ipykernel>=7.2.0",
+    "numpy>=2.4.3",
+    "pandas>=3.0.1",
+    "polars>=1.38.1",
+    "psycopg2-binary>=2.9.11",
+    "pyarrow>=23.0.1",
+    "requests>=2.32.5",
+    "sqlalchemy>=2.0.48",
+    "tqdm>=4.67.3",
+]
