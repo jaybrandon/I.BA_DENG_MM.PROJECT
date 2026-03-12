@@ -54,19 +54,18 @@ def download_batch(url: str, path: Path):
 
 
 def ingest_data(path: Path, engine, target_table: str, chunksize: int):
-    df_iter = pl.scan_csv(path / '*.csv', separator=';', try_parse_dates=True, schema_overrides={'LINIEN_ID':pl.String}).collect_batches(
-        chunk_size=chunksize
-    )
+    df_iter = pl.scan_csv(
+        path / "*.csv",
+        separator=";",
+        try_parse_dates=True,
+        schema_overrides={"LINIEN_ID": pl.String},
+    ).collect_batches(chunk_size=chunksize)
 
     first_chunk = next(df_iter)
 
-    first_chunk.head(0).write_database(target_table, engine, if_table_exists="replace")
+    first_chunk.write_database(target_table, engine, if_table_exists="replace")
 
-    print(f"Table {target_table} created")
-
-    first_chunk.write_database(target_table, engine, if_table_exists="append")
-
-    for df_chunk in tqdm(df_iter, desc='inserting'):
+    for df_chunk in tqdm(df_iter, desc="inserting"):
         df_chunk.write_database(target_table, engine, if_table_exists="append")
 
     print(f"done ingesting to {target_table}")
@@ -82,7 +81,7 @@ def ingest_data(path: Path, engine, target_table: str, chunksize: int):
 @click.option("--month", default=1, type=int, help="Month of the data")
 @click.option("--version", default=2, type=int, help="Dataset version")
 @click.option("--chunksize", default=None, type=int, help="Chunk size for ingestion")
-@click.option("--target-table", default="journeys", help="Target table name")
+@click.option("--target-table", default="stop_event_ingest", help="Target table name")
 def main(
     pg_user,
     pg_pass,
