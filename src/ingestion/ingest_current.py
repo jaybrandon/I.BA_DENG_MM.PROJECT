@@ -5,27 +5,8 @@ from io import BytesIO
 
 import click
 import requests
-from tqdm import tqdm
+
 import util.db_handler as db
-
-def ingest_data(url: str, engine, target_table: str, chunksize: int):
-    df_iter = pl.scan_csv(
-        url,
-        separator=";",
-        try_parse_dates=True,
-        schema_overrides={"LINIEN_ID": pl.String},
-    ).collect_batches(chunk_size=chunksize)
-
-    print("Downloading data...")
-
-    first_chunk = next(df_iter)
-
-    first_chunk.write_database(target_table, engine, if_table_exists="replace")
-
-    for df_chunk in tqdm(df_iter, desc="inserting"):
-        df_chunk.write_database(target_table, engine, if_table_exists="append")
-
-    print(f"done ingesting to {target_table}")
 
 
 @click.command()
@@ -81,8 +62,9 @@ def main(
         """,
     )
 
-    print('Ingesting data...')
+    print("Ingesting data...")
     db.ingest_csv(connection, BytesIO(r.content))
+
 
 if __name__ == "__main__":
     main()
