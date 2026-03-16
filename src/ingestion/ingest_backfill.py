@@ -1,16 +1,20 @@
+import sys
+
+sys.path.append("../")
+import glob
 import shutil
 from pathlib import Path
 from zipfile import ZipFile
 
 import click
-import polars as pl
 import requests
-from sqlalchemy import create_engine
 from tqdm import tqdm
 
+import util.db_handler as db
 
-def get_source_url(year: int, month: int, version: int):
-    file_name = f"ist-daten-{'v2-' if version == 2 else ''}{year}-{month:02d}.zip"
+
+def get_source_url(year: int, month: int):
+    file_name = f"ist-daten-v2-{year}-{month:02d}.zip"
 
     buckets = [
         f"https://archive.opentransportdata.swiss/istdaten/{year}/",
@@ -53,24 +57,6 @@ def download_batch(url: str, path: Path):
     print("Done extracting")
 
 
-def ingest_data(path: Path, engine, target_table: str, chunksize: int):
-    df_iter = pl.scan_csv(
-        path / "*.csv",
-        separator=";",
-        try_parse_dates=True,
-        schema_overrides={"LINIEN_ID": pl.String},
-    ).collect_batches(chunk_size=chunksize)
-
-    first_chunk = next(df_iter)
-
-    first_chunk.write_database(target_table, engine, if_table_exists="replace")
-
-    for df_chunk in tqdm(df_iter, desc="inserting"):
-        df_chunk.write_database(target_table, engine, if_table_exists="append")
-
-    print(f"done ingesting to {target_table}")
-
-
 @click.command()
 @click.option("--pg-user", default="root", help="PostgreSQL username")
 @click.option("--pg-pass", default="root", help="PostgreSQL password")
@@ -79,9 +65,6 @@ def ingest_data(path: Path, engine, target_table: str, chunksize: int):
 @click.option("--pg-db", default="swiss_transport", help="PostgreSQL database name")
 @click.option("--year", default="2026", type=int, help="Year of the data")
 @click.option("--month", default=1, type=int, help="Month of the data")
-@click.option("--version", default=2, type=int, help="Dataset version")
-@click.option("--chunksize", default=None, type=int, help="Chunk size for ingestion")
-@click.option("--target-table", default="stop_event_staging", help="Target table name")
 def main(
     pg_user,
     pg_pass,
@@ -90,27 +73,58 @@ def main(
     pg_db,
     year,
     month,
-    version,
-    chunksize,
-    target_table,
 ):
-    engine = create_engine(
-        f"postgresql://{pg_user}:{pg_pass}@{pg_host}:{pg_port}/{pg_db}"
-    )
-
-    url = get_source_url(year, month, version)
+    url = get_source_url(year, month)
 
     if url is None:
-        print(f"No data source found for {year}-{month:02d} version {version}")
+        print(f"No data source found for {year}-{month:02d}")
         return
 
     data_dir = Path("./data/")
 
     download_batch(url, data_dir)
 
-    ingest_data(
-        path=data_dir, engine=engine, target_table=target_table, chunksize=chunksize
+    connection = db.create_connection(pg_db, pg_user, pg_pass, pg_host, pg_port)
+
+    db.execute_query(
+        connection,
+        """
+        DROP TABLE IF EXISTS stg_stop_events;
+
+        CREATE TABLE stg_stop_events (
+            betriebstag VARCHAR,
+            fahrt_bezeichner VARCHAR,
+            betreiber_id VARCHAR,
+            betreiber_abk VARCHAR,
+            betreiber_name VARCHAR,
+            produkt_id VARCHAR,
+            linien_id VARCHAR,
+            linien_text VARCHAR,
+            umlauf_id VARCHAR,
+            verkehrsmittel_text VARCHAR,
+            zusatzfahrt_tf BOOLEAN,
+            faellt_aus_tf BOOLEAN,
+            bpuic VARCHAR,
+            haltestellen_name VARCHAR,
+            ankunftszeit VARCHAR,
+            an_prognose VARCHAR,
+            an_prognose_status VARCHAR,
+            abfahrtszeit VARCHAR,
+            ab_prognose VARCHAR,
+            ab_prognose_status VARCHAR,
+            durchfahrt_tf BOOLEAN,
+            sloid VARCHAR
+        );
+        """,
     )
+
+    for file in tqdm(glob.iglob(str(data_dir / "*.csv")), "Ingesting files"):
+        with open(file, "r", encoding="utf-8") as f:
+            db.ingest_csv(connection, f)
+
+    connection.close()
+
+    shutil.rmtree(data_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":

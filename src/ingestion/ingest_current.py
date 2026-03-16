@@ -1,8 +1,12 @@
-import click
-import polars as pl
-from sqlalchemy import create_engine
-from tqdm import tqdm
+import sys
 
+sys.path.append("../")
+from io import BytesIO
+
+import click
+import requests
+from tqdm import tqdm
+import util.db_handler as db
 
 def ingest_data(url: str, engine, target_table: str, chunksize: int):
     df_iter = pl.scan_csv(
@@ -30,31 +34,55 @@ def ingest_data(url: str, engine, target_table: str, chunksize: int):
 @click.option("--pg-host", default="localhost", help="PostgreSQL host")
 @click.option("--pg-port", default="5432", help="PostgreSQL port")
 @click.option("--pg-db", default="swiss_transport", help="PostgreSQL database name")
-@click.option("--version", default=2, type=int, help="Dataset version")
-@click.option("--chunksize", default=None, type=int, help="Chunk size for ingestion")
-@click.option("--target-table", default="stop_event_staging", help="Target table name")
 def main(
     pg_user,
     pg_pass,
     pg_host,
     pg_port,
     pg_db,
-    version,
-    chunksize,
-    target_table,
 ):
-    engine = create_engine(
-        f"postgresql://{pg_user}:{pg_pass}@{pg_host}:{pg_port}/{pg_db}"
+    url = "https://data.opentransportdata.swiss/en/dataset/ist-daten-v2/permalink"
+
+    r = requests.get(url, stream=True)
+    if not r.ok:
+        print(f"Failed to get file - Status: {r.status} - URL: {url}")
+
+    connection = db.create_connection(pg_db, pg_user, pg_pass, pg_host, pg_port)
+
+    db.execute_query(
+        connection,
+        """
+        DROP TABLE IF EXISTS stg_stop_events;
+
+        CREATE TABLE stg_stop_events (
+            betriebstag VARCHAR,
+            fahrt_bezeichner VARCHAR,
+            betreiber_id VARCHAR,
+            betreiber_abk VARCHAR,
+            betreiber_name VARCHAR,
+            produkt_id VARCHAR,
+            linien_id VARCHAR,
+            linien_text VARCHAR,
+            umlauf_id VARCHAR,
+            verkehrsmittel_text VARCHAR,
+            zusatzfahrt_tf BOOLEAN,
+            faellt_aus_tf BOOLEAN,
+            bpuic VARCHAR,
+            haltestellen_name VARCHAR,
+            ankunftszeit VARCHAR,
+            an_prognose VARCHAR,
+            an_prognose_status VARCHAR,
+            abfahrtszeit VARCHAR,
+            ab_prognose VARCHAR,
+            ab_prognose_status VARCHAR,
+            durchfahrt_tf BOOLEAN,
+            sloid VARCHAR
+        );
+        """,
     )
 
-    url = (
-        "https://data.opentransportdata.swiss/en/dataset/ist-daten-v2/permalink"
-        if version == 2
-        else "https://data.opentransportdata.swiss/en/dataset/istdaten/permalink"
-    )
-
-    ingest_data(url=url, engine=engine, target_table=target_table, chunksize=chunksize)
-
+    print('Ingesting data...')
+    db.ingest_csv(connection, BytesIO(r.content))
 
 if __name__ == "__main__":
     main()
