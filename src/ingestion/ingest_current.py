@@ -32,7 +32,7 @@ def ingest_data(url: str, engine, target_table: str, chunksize: int):
 @click.option("--pg-db", default="swiss_transport", help="PostgreSQL database name")
 @click.option("--version", default=2, type=int, help="Dataset version")
 @click.option("--chunksize", default=None, type=int, help="Chunk size for ingestion")
-@click.option("--target-table", default="stop_event_ingest", help="Target table name")
+@click.option("--target-table", default="stop_event_staging", help="Target table name")
 def main(
     pg_user,
     pg_pass,
