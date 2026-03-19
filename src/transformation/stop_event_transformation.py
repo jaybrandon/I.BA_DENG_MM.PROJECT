@@ -1,32 +1,10 @@
 import psycopg2
 from psycopg2 import OperationalError, Error
 
-def create_connection(db_name: str, db_user: str, db_password: str, db_host: str, db_port: str):
-    try:
-        connection = psycopg2.connect(
-            database=db_name,
-            user=db_user,
-            password=db_password,
-            host=db_host,
-            port=db_port,
-        )
-        print("Connection to PostgreSQL DB successful")
-        return connection
-    except OperationalError as e:
-        print(f"Connection error: {e}")
-        return None
-    
-def execute_query(connection, query: str):
-    try:
-        with connection.cursor() as cursor:
-            cursor.execute(query)
-        connection.commit()
-    except Error as e:
-        connection.rollback()
-        print(f"Query error: {e}")
+import util.db_handler as db
 
-if __name__ == "__main__":
-    connection = create_connection(
+def main():
+    connection = db.create_connection(
         "swiss_transport",
         "root",
         "root",
@@ -36,15 +14,15 @@ if __name__ == "__main__":
 
     if connection:
 
-        execute_query(connection, """
+        db.execute_query(connection, """
         DROP TABLE IF EXISTS stop_event_ingest_altered;
         
         CREATE TABLE stop_event_ingest_altered AS
         SELECT *
-        FROM stop_event_ingest;
+        FROM stop_event_staging;
         """)
 
-        execute_query(connection, """
+        db.execute_query(connection, """
                       ALTER TABLE stop_event_ingest_altered
                       ADD COLUMN delay_arrival_sec INTEGER,
                       ADD COLUMN delay_departure_sec INTEGER,
@@ -53,7 +31,7 @@ if __name__ == "__main__":
                       ADD COLUMN is_peak_hour BOOLEAN;
                       """)
         
-        execute_query(connection, """
+        db.execute_query(connection, """
                       UPDATE stop_event_ingest_altered
                       SET delay_arrival_sec =
                       EXTRACT(EPOCH FROM ("AN_PROGNOSE" - "ANKUNFTSZEIT"))::INTEGER
@@ -61,7 +39,7 @@ if __name__ == "__main__":
                       AND "AN_PROGNOSE" IS NOT NULL;
                         """)
         
-        execute_query(connection, """
+        db.execute_query(connection, """
                       UPDATE stop_event_ingest_altered
                       SET delay_departure_sec =
                       EXTRACT(EPOCH FROM ("AB_PROGNOSE" - "ABFAHRTSZEIT"))::INTEGER
@@ -69,27 +47,27 @@ if __name__ == "__main__":
                       AND "AB_PROGNOSE" IS NOT NULL;
                 """)
         
-        execute_query(connection, """
+        db.execute_query(connection, """
                       UPDATE stop_event_ingest_altered
                       SET service_hour =
                       EXTRACT(HOUR FROM "ANKUNFTSZEIT")::SMALLINT
                       WHERE "ANKUNFTSZEIT" IS NOT NULL
                       """)
         
-        execute_query(connection, """
+        db.execute_query(connection, """
                       UPDATE stop_event_ingest_altered
                       SET service_day_of_week =
                       EXTRACT(ISODOW FROM "ANKUNFTSZEIT")::SMALLINT
                       WHERE "ANKUNFTSZEIT" IS NOT NULL
                       """)
         
-        execute_query(connection, """
+        db.execute_query(connection, """
                       UPDATE stop_event_ingest_altered
                       SET is_peak_hour = service_hour IN (7, 8, 9, 16, 17, 18);
                       """)
         
         
-        execute_query(connection, """
+        db.execute_query(connection, """
                     DROP TABLE IF EXISTS station_delay_daily;
 
                     CREATE TABLE station_delay_daily AS
@@ -111,3 +89,6 @@ if __name__ == "__main__":
         """)
                 
     connection.close()
+
+if __name__ == "__main__":
+    main()
