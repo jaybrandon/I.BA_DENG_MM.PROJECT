@@ -1,36 +1,41 @@
 volumes:
   swiss_transport_postgres_data:
     driver: local
-  pgadmin_data:
-    driver: local
-  kestra_data:
-      driver: local
-  kestra_tmp:
-      driver: local
   kestra_postgres_data:
     driver: local
+  kestra_data:
+    driver: local
+  kestra_tmp:
+      driver: local
 
 
 services:
   pgdatabase:
     image: postgres:18
     environment:
-      - POSTGRES_USER=root
-      - POSTGRES_PASSWORD=root
-      - POSTGRES_DB=swiss_transport
-    volumes:
-      - "swiss_transport_postgres_data:/var/lib/postgresql:rw"
+      POSTGRES_USER: root
+      POSTGRES_PASSWORD: root
+      POSTGRES_DB: swiss_transport
     ports:
       - "5432:5432"
+    volumes:
+      - "swiss_transport_postgres_data:/var/lib/postgresql"
+    depends_on:
+      kestra:
+        condition: service_started
+
+
   pgadmin:
     image: dpage/pgadmin4
     environment:
       - PGADMIN_DEFAULT_EMAIL=admin@admin.com
       - PGADMIN_DEFAULT_PASSWORD=root
-    volumes:
-      - "pgadmin_data:/var/lib/pgadmin"
     ports:
       - "8085:80"
+    depends_on:
+      pgdatabase:
+        condition: service_started
+
   kestra_postgres:
     image: postgres:18
     volumes:
