@@ -1,0 +1,253 @@
+id: ingest_current_data
+namespace: hslu
+description: |
+  Fetches the current public transport dataset from the Open Transport Data
+  permalink, loads it into PostgreSQL staging, and runs the transformation.
+
+concurrency:
+  limit: 1
+
+triggers:
+  - id: daily_schedule
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "0 2 * * *"
+    timezone: Europe/Zurich
+
+tasks:
+  - id: download_current_data
+    type: io.kestra.plugin.scripts.python.Script
+    beforeCommands:
+      - pip install requests
+    outputFiles:
+      - "data/current_stop_events.csv"
+    script: |
+      import shutil
+      from pathlib import Path
+
+      import requests
+
+      url = "https://data.opentransportdata.swiss/en/dataset/ist-daten-v2/permalink"
+
+      data_dir = Path("data")
+      shutil.rmtree(data_dir, ignore_errors=True)
+      data_dir.mkdir(exist_ok=True)
+
+      output_path = data_dir / "current_stop_events.csv"
+
+      response = requests.get(url, stream=True)
+      response.raise_for_status()
+
+      with open(output_path, "wb") as f:
+          for chunk in response.iter_content(chunk_size=1024 * 1024):
+              if chunk:
+                  f.write(chunk)
+
+      print(f"Downloaded current dataset to {output_path}")
+
+  - id: create_staging_table
+    type: io.kestra.plugin.jdbc.postgresql.Queries
+    sql: |
+      DROP TABLE IF EXISTS stg_stop_events;
+
+      CREATE TABLE stg_stop_events (
+          betriebstag VARCHAR,
+          fahrt_bezeichner VARCHAR,
+          betreiber_id VARCHAR,
+          betreiber_abk VARCHAR,
+          betreiber_name VARCHAR,
+          produkt_id VARCHAR,
+          linien_id VARCHAR,
+          linien_text VARCHAR,
+          umlauf_id VARCHAR,
+          verkehrsmittel_text VARCHAR,
+          zusatzfahrt_tf BOOLEAN,
+          faellt_aus_tf BOOLEAN,
+          bpuic VARCHAR,
+          haltestellen_name VARCHAR,
+          ankunftszeit VARCHAR,
+          an_prognose VARCHAR,
+          an_prognose_status VARCHAR,
+          abfahrtszeit VARCHAR,
+          ab_prognose VARCHAR,
+          ab_prognose_status VARCHAR,
+          durchfahrt_tf BOOLEAN,
+          sloid VARCHAR
+      );
+
+  - id: copy_current_csv_to_staging
+    type: io.kestra.plugin.jdbc.postgresql.CopyIn
+    format: CSV
+    from: "{{ outputs.download_current_data.outputFiles['data/current_stop_events.csv'] }}"
+    table: "stg_stop_events"
+    header: true
+    delimiter: ";"
+
+  - id: build_fact_table
+    type: io.kestra.plugin.jdbc.postgresql.Queries
+    sql: |
+      DROP TABLE IF EXISTS fact_stop_events;
+
+      CREATE TABLE fact_stop_events (
+          id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+          betriebstag DATE,
+          fahrt_bezeichner TEXT,
+          betreiber_id TEXT,
+          betreiber_abk TEXT,
+          betreiber_name TEXT,
+          produkt_id TEXT,
+          linien_id TEXT,
+          linien_text TEXT,
+          umlauf_id TEXT,
+          verkehrsmittel_text TEXT,
+          zusatzfahrt_tf BOOLEAN,
+          faellt_aus_tf BOOLEAN,
+          bpuic TEXT,
+          haltestellen_name TEXT,
+          ankunftszeit TIMESTAMP,
+          an_prognose TIMESTAMP,
+          an_prognose_status TEXT,
+          abfahrtszeit TIMESTAMP,
+          ab_prognose TIMESTAMP,
+          ab_prognose_status TEXT,
+          durchfahrt_tf BOOLEAN,
+          sloid TEXT,
+          delay_arrival_sec INTEGER,
+          delay_departure_sec INTEGER,
+          service_hour SMALLINT,
+          service_day_of_week SMALLINT,
+          is_peak_hour BOOLEAN
+      );
+
+      INSERT INTO fact_stop_events (
+          betriebstag,
+          fahrt_bezeichner,
+          betreiber_id,
+          betreiber_abk,
+          betreiber_name,
+          produkt_id,
+          linien_id,
+          linien_text,
+          umlauf_id,
+          verkehrsmittel_text,
+          zusatzfahrt_tf,
+          faellt_aus_tf,
+          bpuic,
+          haltestellen_name,
+          ankunftszeit,
+          an_prognose,
+          an_prognose_status,
+          abfahrtszeit,
+          ab_prognose,
+          ab_prognose_status,
+          durchfahrt_tf,
+          sloid,
+          delay_arrival_sec,
+          delay_departure_sec,
+          service_hour,
+          service_day_of_week,
+          is_peak_hour
+      )
+      SELECT
+          TO_DATE(NULLIF(betriebstag, ''), 'DD.MM.YYYY') AS betriebstag,
+          fahrt_bezeichner,
+          betreiber_id,
+          betreiber_abk,
+          betreiber_name,
+          produkt_id,
+          linien_id,
+          linien_text,
+          umlauf_id,
+          verkehrsmittel_text,
+          zusatzfahrt_tf,
+          faellt_aus_tf,
+          bpuic,
+          haltestellen_name,
+          TO_TIMESTAMP(NULLIF(ankunftszeit, ''), 'DD.MM.YYYY HH24:MI') AS ankunftszeit,
+          TO_TIMESTAMP(NULLIF(an_prognose, ''), 'DD.MM.YYYY HH24:MI') AS an_prognose,
+          an_prognose_status,
+          TO_TIMESTAMP(NULLIF(abfahrtszeit, ''), 'DD.MM.YYYY HH24:MI') AS abfahrtszeit,
+          TO_TIMESTAMP(NULLIF(ab_prognose, ''), 'DD.MM.YYYY HH24:MI') AS ab_prognose,
+          ab_prognose_status,
+          durchfahrt_tf,
+          sloid,
+
+          CASE
+              WHEN NULLIF(ankunftszeit, '') IS NOT NULL
+               AND NULLIF(an_prognose, '') IS NOT NULL
+              THEN EXTRACT(
+                  EPOCH FROM (
+                      TO_TIMESTAMP(NULLIF(an_prognose, ''), 'DD.MM.YYYY HH24:MI')
+                      - TO_TIMESTAMP(NULLIF(ankunftszeit, ''), 'DD.MM.YYYY HH24:MI')
+                  )
+              )::INTEGER
+              ELSE NULL
+          END AS delay_arrival_sec,
+
+          CASE
+              WHEN NULLIF(abfahrtszeit, '') IS NOT NULL
+               AND NULLIF(ab_prognose, '') IS NOT NULL
+              THEN EXTRACT(
+                  EPOCH FROM (
+                      TO_TIMESTAMP(NULLIF(ab_prognose, ''), 'DD.MM.YYYY HH24:MI')
+                      - TO_TIMESTAMP(NULLIF(abfahrtszeit, ''), 'DD.MM.YYYY HH24:MI')
+                  )
+              )::INTEGER
+              ELSE NULL
+          END AS delay_departure_sec,
+
+          CASE
+              WHEN NULLIF(ankunftszeit, '') IS NOT NULL
+              THEN EXTRACT(HOUR FROM TO_TIMESTAMP(NULLIF(ankunftszeit, ''), 'DD.MM.YYYY HH24:MI'))::SMALLINT
+              ELSE NULL
+          END AS service_hour,
+
+          CASE
+              WHEN NULLIF(ankunftszeit, '') IS NOT NULL
+              THEN EXTRACT(ISODOW FROM TO_TIMESTAMP(NULLIF(ankunftszeit, ''), 'DD.MM.YYYY HH24:MI'))::SMALLINT
+              ELSE NULL
+          END AS service_day_of_week,
+
+          CASE
+              WHEN NULLIF(ankunftszeit, '') IS NOT NULL
+              THEN EXTRACT(HOUR FROM TO_TIMESTAMP(NULLIF(ankunftszeit, ''), 'DD.MM.YYYY HH24:MI')) IN (7, 8, 9, 16, 17, 18)
+              ELSE NULL
+          END AS is_peak_hour
+      FROM stg_stop_events;
+
+  - id: build_station_delay_daily
+    type: io.kestra.plugin.jdbc.postgresql.Queries
+    sql: |
+      DROP TABLE IF EXISTS station_delay_daily;
+
+      CREATE TABLE station_delay_daily AS
+      SELECT
+          haltestellen_name,
+          DATE(ankunftszeit) AS service_date,
+          EXTRACT(ISODOW FROM ankunftszeit)::SMALLINT AS day_of_week,
+          COUNT(*) AS total_records,
+          COUNT(delay_arrival_sec) AS records_with_delay,
+          AVG(delay_arrival_sec)::DOUBLE PRECISION AS avg_delay_arrival_sec,
+          SUM(delay_arrival_sec)::BIGINT AS total_delay_seconds,
+          AVG(
+              CASE
+                  WHEN delay_arrival_sec > 0 THEN 1.0
+                  ELSE 0.0
+              END
+          )::DOUBLE PRECISION AS delay_percentage
+      FROM fact_stop_events
+      WHERE ankunftszeit IS NOT NULL
+      GROUP BY
+          haltestellen_name,
+          DATE(ankunftszeit),
+          EXTRACT(ISODOW FROM ankunftszeit);
+
+  - id: purge_files
+    type: io.kestra.plugin.core.storage.PurgeCurrentExecutionFiles
+    description: Remove downloaded execution files from Kestra storage
+
+pluginDefaults:
+  - type: io.kestra.plugin.jdbc.postgresql
+    values:
+      url: jdbc:postgresql://pgdatabase:5432/swiss_transport
+      username: root
+      password: root
