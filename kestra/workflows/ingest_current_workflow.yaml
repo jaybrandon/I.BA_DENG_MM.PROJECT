@@ -82,137 +82,159 @@ tasks:
     header: true
     delimiter: ";"
 
-  - id: build_fact_table
+  - id: ensure_fact_table_exists
     type: io.kestra.plugin.jdbc.postgresql.Queries
     sql: |
-      DROP TABLE IF EXISTS fact_stop_events;
+        CREATE TABLE IF NOT EXISTS fact_stop_events (
+            id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            event_unique_id TEXT UNIQUE,
+            betriebstag DATE,
+            fahrt_bezeichner TEXT,
+            betreiber_id TEXT,
+            betreiber_abk TEXT,
+            betreiber_name TEXT,
+            produkt_id TEXT,
+            linien_id TEXT,
+            linien_text TEXT,
+            umlauf_id TEXT,
+            verkehrsmittel_text TEXT,
+            zusatzfahrt_tf BOOLEAN,
+            faellt_aus_tf BOOLEAN,
+            bpuic TEXT,
+            haltestellen_name TEXT,
+            ankunftszeit TIMESTAMP,
+            an_prognose TIMESTAMP,
+            an_prognose_status TEXT,
+            abfahrtszeit TIMESTAMP,
+            ab_prognose TIMESTAMP,
+            ab_prognose_status TEXT,
+            durchfahrt_tf BOOLEAN,
+            sloid TEXT,
+            delay_arrival_sec INTEGER,
+            delay_departure_sec INTEGER,
+            service_hour SMALLINT,
+            service_day_of_week SMALLINT,
+            is_peak_hour BOOLEAN
+        );
 
-      CREATE TABLE fact_stop_events (
-          id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-          betriebstag DATE,
-          fahrt_bezeichner TEXT,
-          betreiber_id TEXT,
-          betreiber_abk TEXT,
-          betreiber_name TEXT,
-          produkt_id TEXT,
-          linien_id TEXT,
-          linien_text TEXT,
-          umlauf_id TEXT,
-          verkehrsmittel_text TEXT,
-          zusatzfahrt_tf BOOLEAN,
-          faellt_aus_tf BOOLEAN,
-          bpuic TEXT,
-          haltestellen_name TEXT,
-          ankunftszeit TIMESTAMP,
-          an_prognose TIMESTAMP,
-          an_prognose_status TEXT,
-          abfahrtszeit TIMESTAMP,
-          ab_prognose TIMESTAMP,
-          ab_prognose_status TEXT,
-          durchfahrt_tf BOOLEAN,
-          sloid TEXT,
-          delay_arrival_sec INTEGER,
-          delay_departure_sec INTEGER,
-          service_hour SMALLINT,
-          service_day_of_week SMALLINT,
-          is_peak_hour BOOLEAN
-      );
-
-      INSERT INTO fact_stop_events (
-          betriebstag,
-          fahrt_bezeichner,
-          betreiber_id,
-          betreiber_abk,
-          betreiber_name,
-          produkt_id,
-          linien_id,
-          linien_text,
-          umlauf_id,
-          verkehrsmittel_text,
-          zusatzfahrt_tf,
-          faellt_aus_tf,
-          bpuic,
-          haltestellen_name,
-          ankunftszeit,
-          an_prognose,
-          an_prognose_status,
-          abfahrtszeit,
-          ab_prognose,
-          ab_prognose_status,
-          durchfahrt_tf,
-          sloid,
-          delay_arrival_sec,
-          delay_departure_sec,
-          service_hour,
-          service_day_of_week,
-          is_peak_hour
-      )
-      SELECT
-          TO_DATE(NULLIF(betriebstag, ''), 'DD.MM.YYYY') AS betriebstag,
-          fahrt_bezeichner,
-          betreiber_id,
-          betreiber_abk,
-          betreiber_name,
-          produkt_id,
-          linien_id,
-          linien_text,
-          umlauf_id,
-          verkehrsmittel_text,
-          zusatzfahrt_tf,
-          faellt_aus_tf,
-          bpuic,
-          haltestellen_name,
-          TO_TIMESTAMP(NULLIF(ankunftszeit, ''), 'DD.MM.YYYY HH24:MI') AS ankunftszeit,
-          TO_TIMESTAMP(NULLIF(an_prognose, ''), 'DD.MM.YYYY HH24:MI') AS an_prognose,
-          an_prognose_status,
-          TO_TIMESTAMP(NULLIF(abfahrtszeit, ''), 'DD.MM.YYYY HH24:MI') AS abfahrtszeit,
-          TO_TIMESTAMP(NULLIF(ab_prognose, ''), 'DD.MM.YYYY HH24:MI') AS ab_prognose,
-          ab_prognose_status,
-          durchfahrt_tf,
-          sloid,
-
-          CASE
-              WHEN NULLIF(ankunftszeit, '') IS NOT NULL
-               AND NULLIF(an_prognose, '') IS NOT NULL
-              THEN EXTRACT(
-                  EPOCH FROM (
-                      TO_TIMESTAMP(NULLIF(an_prognose, ''), 'DD.MM.YYYY HH24:MI')
-                      - TO_TIMESTAMP(NULLIF(ankunftszeit, ''), 'DD.MM.YYYY HH24:MI')
-                  )
-              )::INTEGER
-              ELSE NULL
-          END AS delay_arrival_sec,
-
-          CASE
-              WHEN NULLIF(abfahrtszeit, '') IS NOT NULL
-               AND NULLIF(ab_prognose, '') IS NOT NULL
-              THEN EXTRACT(
-                  EPOCH FROM (
-                      TO_TIMESTAMP(NULLIF(ab_prognose, ''), 'DD.MM.YYYY HH24:MI')
-                      - TO_TIMESTAMP(NULLIF(abfahrtszeit, ''), 'DD.MM.YYYY HH24:MI')
-                  )
-              )::INTEGER
-              ELSE NULL
-          END AS delay_departure_sec,
-
-          CASE
-              WHEN NULLIF(ankunftszeit, '') IS NOT NULL
-              THEN EXTRACT(HOUR FROM TO_TIMESTAMP(NULLIF(ankunftszeit, ''), 'DD.MM.YYYY HH24:MI'))::SMALLINT
-              ELSE NULL
-          END AS service_hour,
-
-          CASE
-              WHEN NULLIF(ankunftszeit, '') IS NOT NULL
-              THEN EXTRACT(ISODOW FROM TO_TIMESTAMP(NULLIF(ankunftszeit, ''), 'DD.MM.YYYY HH24:MI'))::SMALLINT
-              ELSE NULL
-          END AS service_day_of_week,
-
-          CASE
-              WHEN NULLIF(ankunftszeit, '') IS NOT NULL
-              THEN EXTRACT(HOUR FROM TO_TIMESTAMP(NULLIF(ankunftszeit, ''), 'DD.MM.YYYY HH24:MI')) IN (7, 8, 9, 16, 17, 18)
-              ELSE NULL
-          END AS is_peak_hour
-      FROM stg_stop_events;
+  - id: fill_fact_table
+    type: io.kestra.plugin.jdbc.postgresql.Queries
+    sql: |
+        INSERT INTO fact_stop_events (
+            event_unique_id,
+            betriebstag,
+            fahrt_bezeichner,
+            betreiber_id,
+            betreiber_abk,
+            betreiber_name,
+            produkt_id,
+            linien_id,
+            linien_text,
+            umlauf_id,
+            verkehrsmittel_text,
+            zusatzfahrt_tf,
+            faellt_aus_tf,
+            bpuic,
+            haltestellen_name,
+            ankunftszeit,
+            an_prognose,
+            an_prognose_status,
+            abfahrtszeit,
+            ab_prognose,
+            ab_prognose_status,
+            durchfahrt_tf,
+            sloid,
+            delay_arrival_sec,
+            delay_departure_sec,
+            service_hour,
+            service_day_of_week,
+            is_peak_hour
+        )
+        WITH parsed AS (
+            SELECT
+                CONCAT_WS(
+                    '|',
+                    NULLIF(fahrt_bezeichner, ''),
+                    NULLIF(bpuic, ''),
+                    NULLIF(betriebstag, ''),
+                    NULLIF(ankunftszeit, ''),
+                    NULLIF(abfahrtszeit, '')
+                ) AS event_unique_id,
+                TO_DATE(NULLIF(betriebstag, ''), 'DD.MM.YYYY') AS betriebstag,
+                fahrt_bezeichner,
+                betreiber_id,
+                betreiber_abk,
+                betreiber_name,
+                produkt_id,
+                linien_id,
+                linien_text,
+                umlauf_id,
+                verkehrsmittel_text,
+                zusatzfahrt_tf,
+                faellt_aus_tf,
+                bpuic,
+                haltestellen_name,
+                TO_TIMESTAMP(NULLIF(ankunftszeit, ''), 'DD.MM.YYYY HH24:MI') AS ankunftszeit_ts,
+                TO_TIMESTAMP(NULLIF(an_prognose, ''), 'DD.MM.YYYY HH24:MI') AS an_prognose_ts,
+                an_prognose_status,
+                TO_TIMESTAMP(NULLIF(abfahrtszeit, ''), 'DD.MM.YYYY HH24:MI') AS abfahrtszeit_ts,
+                TO_TIMESTAMP(NULLIF(ab_prognose, ''), 'DD.MM.YYYY HH24:MI') AS ab_prognose_ts,
+                ab_prognose_status,
+                durchfahrt_tf,
+                sloid
+            FROM stg_stop_events
+        )
+        SELECT
+            event_unique_id,
+            betriebstag,
+            fahrt_bezeichner,
+            betreiber_id,
+            betreiber_abk,
+            betreiber_name,
+            produkt_id,
+            linien_id,
+            linien_text,
+            umlauf_id,
+            verkehrsmittel_text,
+            zusatzfahrt_tf,
+            faellt_aus_tf,
+            bpuic,
+            haltestellen_name,
+            ankunftszeit_ts,
+            an_prognose_ts,
+            an_prognose_status,
+            abfahrtszeit_ts,
+            ab_prognose_ts,
+            ab_prognose_status,
+            durchfahrt_tf,
+            sloid,
+            CASE
+                WHEN ankunftszeit_ts IS NOT NULL AND an_prognose_ts IS NOT NULL
+                THEN EXTRACT(EPOCH FROM (an_prognose_ts - ankunftszeit_ts))::INTEGER
+                ELSE NULL
+            END AS delay_arrival_sec,
+            CASE
+                WHEN abfahrtszeit_ts IS NOT NULL AND ab_prognose_ts IS NOT NULL
+                THEN EXTRACT(EPOCH FROM (ab_prognose_ts - abfahrtszeit_ts))::INTEGER
+                ELSE NULL
+            END AS delay_departure_sec,
+            CASE
+                WHEN ankunftszeit_ts IS NOT NULL
+                THEN EXTRACT(HOUR FROM ankunftszeit_ts)::SMALLINT
+                ELSE NULL
+            END AS service_hour,
+            CASE
+                WHEN ankunftszeit_ts IS NOT NULL
+                THEN EXTRACT(ISODOW FROM ankunftszeit_ts)::SMALLINT
+                ELSE NULL
+            END AS service_day_of_week,
+            CASE
+                WHEN ankunftszeit_ts IS NOT NULL
+                THEN EXTRACT(HOUR FROM ankunftszeit_ts) IN (7, 8, 9, 16, 17, 18)
+                ELSE NULL
+            END AS is_peak_hour
+        FROM parsed
+        ON CONFLICT (event_unique_id) DO NOTHING;
 
   - id: build_station_delay_daily
     type: io.kestra.plugin.jdbc.postgresql.Queries
