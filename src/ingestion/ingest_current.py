@@ -1,12 +1,9 @@
-import sys
-
-sys.path.append("../")
 from io import BytesIO
 
 import click
 import requests
 
-import util.db_handler as db
+from src.util import db_handler as db
 
 
 @click.command()

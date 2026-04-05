@@ -1,6 +1,3 @@
-import sys
-
-sys.path.append("../")
 import glob
 import shutil
 from pathlib import Path
@@ -10,7 +7,7 @@ import click
 import requests
 from tqdm import tqdm
 
-import util.db_handler as db
+from src.util import db_handler as db
 
 
 def get_source_url(year: int, month: int):
