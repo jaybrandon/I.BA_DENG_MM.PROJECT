@@ -54,11 +54,12 @@ services:
     image: kestra/kestra:v1.1
     pull_policy: always
     user: "root"
-    command: server standalone
+    command: server standalone --flow-path /app/flows
     volumes:
       - kestra_data:/app/storage
       - /var/run/docker.sock:/var/run/docker.sock
       - kestra_tmp:/tmp/kestra-wd
+      - ./kestra/workflows:/app/flows
     
     environment:
       KESTRA_CONFIGURATION: |
