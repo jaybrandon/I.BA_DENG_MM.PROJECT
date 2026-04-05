@@ -1,8 +1,5 @@
 id: backfill_data
 namespace: hslu
-description: |
-  Fetches, loads, and transforms public transport data for a given month and year
-  from archive.opentransportdata.swiss into a PostgreSQL database.
 
 concurrency:
   limit: 1
@@ -11,8 +8,8 @@ inputs:
   - id: month
     type: SELECT
     displayName: Select Month
-    values: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
-    defaults: 1
+    values: ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12"]
+    defaults: "01"
 
   - id: year
     type: SELECT
@@ -22,151 +19,20 @@ inputs:
 
 tasks:
   - id: download_data
-    type: io.kestra.plugin.scripts.python.Script
-    beforeCommands:
-      - pip install requests tqdm
-    outputFiles:
-      - "merged.csv"
-    script: |
-        import shutil
-        from pathlib import Path
-        from zipfile import ZipFile
-        import csv
-        import glob
+    type: "io.kestra.plugin.core.http.Download"
+    uri: https://archive.opentransportdata.swiss/istdaten/{{ inputs.year }}/ist-daten-v2-{{ inputs.year }}-{{ inputs.month }}.zip
 
-        import requests
-        from tqdm import tqdm
+  - id: extract_data
+    type: "io.kestra.plugin.compress.ArchiveDecompress"
+    algorithm: ZIP
+    from: "{{ outputs.download_data.uri }}"
 
-        year = int("{{ inputs.year }}")
-        month = int("{{ inputs.month }}")
-
-        def get_source_url(year: int, month: int):
-            file_name = f"ist-daten-v2-{year}-{month:02d}.zip"
-
-            buckets = [
-                f"https://archive.opentransportdata.swiss/istdaten/{year}/",
-                "https://archive.opentransportdata.swiss/istdaten/2025/",
-            ]
-
-            for bucket in buckets:
-                url = bucket + file_name
-                response = requests.head(url)
-                if response.ok:
-                    return url
-
-            return None
-
-        url = get_source_url(year, month)
-        if url is None:
-            raise Exception(f"No data source found for {year}-{month:02d}")
-
-        data_dir = Path("data")
-        output_file = Path('merged.csv')
-
-        shutil.rmtree(data_dir, ignore_errors=True)
-        data_dir.mkdir(exist_ok=True)
-
-        response = requests.get(url, stream=True)
-        response.raise_for_status()
-
-        zip_path = data_dir / "tmp.zip"
-        total_size = int(response.headers.get("content-length", 0))
-
-        progress = tqdm(
-            total=total_size,
-            unit="iB",
-            unit_scale=True,
-            unit_divisor=1024,
-            desc="Downloading data"
-        )
-
-        with open(zip_path, "wb") as f:
-            for chunk in response.iter_content(chunk_size=1024 * 1024):
-                if chunk:
-                    f.write(chunk)
-                    progress.update(len(chunk))
-        progress.close()
-
-        with ZipFile(zip_path) as zf:
-            zf.extractall(data_dir)
-
-        print(f"Downloaded and extracted files to {data_dir}")
-
-        csv_files = sorted(glob.glob(str(data_dir / "*.csv")))
-
-        if not csv_files:
-            raise Exception("No CSV files found after extraction")
-
-        wrote_header = False
-
-        with open(output_file, "w", encoding="utf-8", newline="") as outfile:
-            writer = None
-
-            for file in csv_files:
-                print(f"Merging {file}")
-
-                with open(file, "r", encoding="utf-8") as infile:
-                    reader = csv.reader(infile, delimiter=";")
-                    header = next(reader, None)
-
-                    if header is None:
-                        continue
-
-                    if not wrote_header:
-                        writer = csv.writer(outfile, delimiter=";")
-                        writer.writerow(header)
-                        wrote_header = True
-
-                    for row in reader:
-                        writer.writerow(row)
-
-        print(f"Merged CSV written to: {output_file}")
-
-
-  - id: create_staging_table
-    type: io.kestra.plugin.jdbc.postgresql.Queries
-    sql: |
-        DROP TABLE IF EXISTS stg_stop_events;
-
-        CREATE TABLE stg_stop_events (
-            betriebstag VARCHAR,
-            fahrt_bezeichner VARCHAR,
-            betreiber_id VARCHAR,
-            betreiber_abk VARCHAR,
-            betreiber_name VARCHAR,
-            produkt_id VARCHAR,
-            linien_id VARCHAR,
-            linien_text VARCHAR,
-            umlauf_id VARCHAR,
-            verkehrsmittel_text VARCHAR,
-            zusatzfahrt_tf BOOLEAN,
-            faellt_aus_tf BOOLEAN,
-            bpuic VARCHAR,
-            haltestellen_name VARCHAR,
-            ankunftszeit VARCHAR,
-            an_prognose VARCHAR,
-            an_prognose_status VARCHAR,
-            abfahrtszeit VARCHAR,
-            ab_prognose VARCHAR,
-            ab_prognose_status VARCHAR,
-            durchfahrt_tf BOOLEAN,
-            sloid VARCHAR
-        );
-
-  - id: copy_current_csv_to_staging
-    type: io.kestra.plugin.jdbc.postgresql.CopyIn
-    format: CSV
-    from: "{{ outputs.download_data.outputFiles['merged.csv'] }}"
-    table: "stg_stop_events"
-    header: true
-    delimiter: ";"
-    
   - id: ensure_fact_table_exists
     type: io.kestra.plugin.jdbc.postgresql.Queries
     sql: |
         CREATE TABLE IF NOT EXISTS fact_stop_events (
             id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-            event_unique_id TEXT UNIQUE,
+            event_unique_id TEXT,
             betriebstag DATE,
             fahrt_bezeichner TEXT,
             betreiber_id TEXT,
@@ -196,125 +62,25 @@ tasks:
             is_peak_hour BOOLEAN
         );
 
-  - id: fill_fact_table 
+        ALTER TABLE fact_stop_events DROP CONSTRAINT IF EXISTS unique_event_id_constraint;
+
+  - id: process_each_file
+    type: io.kestra.plugin.core.flow.ForEach
+    values: "{{outputs.extract_data.files | values}}"
+    tasks:
+      - id: elt_file
+        type: io.kestra.plugin.core.flow.Subflow
+        namespace: hslu
+        flowId: elt_file
+        wait: true
+        inputs:
+          file: "{{ taskrun.value }}"
+
+  - id: finalize_backfill
     type: io.kestra.plugin.jdbc.postgresql.Queries
     sql: |
-        INSERT INTO fact_stop_events (
-            event_unique_id,
-            betriebstag,
-            fahrt_bezeichner,
-            betreiber_id,
-            betreiber_abk,
-            betreiber_name,
-            produkt_id,
-            linien_id,
-            linien_text,
-            umlauf_id,
-            verkehrsmittel_text,
-            zusatzfahrt_tf,
-            faellt_aus_tf,
-            bpuic,
-            haltestellen_name,
-            ankunftszeit,
-            an_prognose,
-            an_prognose_status,
-            abfahrtszeit,
-            ab_prognose,
-            ab_prognose_status,
-            durchfahrt_tf,
-            sloid,
-            delay_arrival_sec,
-            delay_departure_sec,
-            service_hour,
-            service_day_of_week,
-            is_peak_hour
-        )
-        WITH parsed AS (
-            SELECT
-                CONCAT_WS(
-                    '|',
-                    NULLIF(fahrt_bezeichner, ''),
-                    NULLIF(bpuic, ''),
-                    NULLIF(betriebstag, ''),
-                    NULLIF(ankunftszeit, ''),
-                    NULLIF(abfahrtszeit, '')
-                ) AS event_unique_id,
-                TO_DATE(NULLIF(betriebstag, ''), 'DD.MM.YYYY') AS betriebstag,
-                fahrt_bezeichner,
-                betreiber_id,
-                betreiber_abk,
-                betreiber_name,
-                produkt_id,
-                linien_id,
-                linien_text,
-                umlauf_id,
-                verkehrsmittel_text,
-                zusatzfahrt_tf,
-                faellt_aus_tf,
-                bpuic,
-                haltestellen_name,
-                TO_TIMESTAMP(NULLIF(ankunftszeit, ''), 'DD.MM.YYYY HH24:MI') AS ankunftszeit_ts,
-                TO_TIMESTAMP(NULLIF(an_prognose, ''), 'DD.MM.YYYY HH24:MI') AS an_prognose_ts,
-                an_prognose_status,
-                TO_TIMESTAMP(NULLIF(abfahrtszeit, ''), 'DD.MM.YYYY HH24:MI') AS abfahrtszeit_ts,
-                TO_TIMESTAMP(NULLIF(ab_prognose, ''), 'DD.MM.YYYY HH24:MI') AS ab_prognose_ts,
-                ab_prognose_status,
-                durchfahrt_tf,
-                sloid
-            FROM stg_stop_events
-        )
-        SELECT
-            event_unique_id,
-            betriebstag,
-            fahrt_bezeichner,
-            betreiber_id,
-            betreiber_abk,
-            betreiber_name,
-            produkt_id,
-            linien_id,
-            linien_text,
-            umlauf_id,
-            verkehrsmittel_text,
-            zusatzfahrt_tf,
-            faellt_aus_tf,
-            bpuic,
-            haltestellen_name,
-            ankunftszeit_ts,
-            an_prognose_ts,
-            an_prognose_status,
-            abfahrtszeit_ts,
-            ab_prognose_ts,
-            ab_prognose_status,
-            durchfahrt_tf,
-            sloid,
-            CASE
-                WHEN ankunftszeit_ts IS NOT NULL AND an_prognose_ts IS NOT NULL
-                THEN EXTRACT(EPOCH FROM (an_prognose_ts - ankunftszeit_ts))::INTEGER
-                ELSE NULL
-            END AS delay_arrival_sec,
-            CASE
-                WHEN abfahrtszeit_ts IS NOT NULL AND ab_prognose_ts IS NOT NULL
-                THEN EXTRACT(EPOCH FROM (ab_prognose_ts - abfahrtszeit_ts))::INTEGER
-                ELSE NULL
-            END AS delay_departure_sec,
-            CASE
-                WHEN ankunftszeit_ts IS NOT NULL
-                THEN EXTRACT(HOUR FROM ankunftszeit_ts)::SMALLINT
-                ELSE NULL
-            END AS service_hour,
-            CASE
-                WHEN ankunftszeit_ts IS NOT NULL
-                THEN EXTRACT(ISODOW FROM ankunftszeit_ts)::SMALLINT
-                ELSE NULL
-            END AS service_day_of_week,
-            CASE
-                WHEN ankunftszeit_ts IS NOT NULL
-                THEN EXTRACT(HOUR FROM ankunftszeit_ts) IN (7, 8, 9, 16, 17, 18)
-                ELSE NULL
-            END AS is_peak_hour
-        FROM parsed
-        ON CONFLICT (event_unique_id) DO NOTHING;
-
+        ALTER TABLE fact_stop_events 
+        ADD CONSTRAINT unique_event_id_constraint UNIQUE (event_unique_id);
 
   - id: build_station_delay_daily
     type: io.kestra.plugin.jdbc.postgresql.Queries
@@ -324,11 +90,11 @@ tasks:
         CREATE TABLE station_delay_daily AS
         SELECT
             haltestellen_name,
-            DATE(ankunftszeit) AS service_date,
-            EXTRACT(ISODOW FROM ankunftszeit)::SMALLINT AS day_of_week,
+            betriebstag AS service_date,
+            EXTRACT(ISODOW FROM betriebstag)::SMALLINT AS day_of_week,
             COUNT(*) AS total_records,
-            COUNT(delay_arrival_sec) AS records_with_delay,
-            AVG(delay_arrival_sec)::DOUBLE PRECISION AS avg_delay_arrival_sec,
+            SUM(CASE WHEN delay_arrival_sec > 0 THEN 1 ELSE 0 END)::INTEGER AS records_with_delay,
+            AVG(delay_arrival_sec)::DOUBLE PRECISION AS avg_delay_seconds,
             SUM(delay_arrival_sec)::BIGINT AS total_delay_seconds,
             AVG(
                 CASE
@@ -340,8 +106,7 @@ tasks:
         WHERE ankunftszeit IS NOT NULL
         GROUP BY
             haltestellen_name,
-            DATE(ankunftszeit),
-            EXTRACT(ISODOW FROM ankunftszeit);
+            betriebstag;
 
   - id: purge_files
     type: io.kestra.plugin.core.storage.PurgeCurrentExecutionFiles

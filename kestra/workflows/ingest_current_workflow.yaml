@@ -14,73 +14,9 @@ triggers:
     timezone: Europe/Zurich
 
 tasks:
-  - id: download_current_data
-    type: io.kestra.plugin.scripts.python.Script
-    beforeCommands:
-      - pip install requests
-    outputFiles:
-      - "data/current_stop_events.csv"
-    script: |
-      import shutil
-      from pathlib import Path
-
-      import requests
-
-      url = "https://data.opentransportdata.swiss/en/dataset/ist-daten-v2/permalink"
-
-      data_dir = Path("data")
-      shutil.rmtree(data_dir, ignore_errors=True)
-      data_dir.mkdir(exist_ok=True)
-
-      output_path = data_dir / "current_stop_events.csv"
-
-      response = requests.get(url, stream=True)
-      response.raise_for_status()
-
-      with open(output_path, "wb") as f:
-          for chunk in response.iter_content(chunk_size=1024 * 1024):
-              if chunk:
-                  f.write(chunk)
-
-      print(f"Downloaded current dataset to {output_path}")
-
-  - id: create_staging_table
-    type: io.kestra.plugin.jdbc.postgresql.Queries
-    sql: |
-      DROP TABLE IF EXISTS stg_stop_events;
-
-      CREATE TABLE stg_stop_events (
-          betriebstag VARCHAR,
-          fahrt_bezeichner VARCHAR,
-          betreiber_id VARCHAR,
-          betreiber_abk VARCHAR,
-          betreiber_name VARCHAR,
-          produkt_id VARCHAR,
-          linien_id VARCHAR,
-          linien_text VARCHAR,
-          umlauf_id VARCHAR,
-          verkehrsmittel_text VARCHAR,
-          zusatzfahrt_tf BOOLEAN,
-          faellt_aus_tf BOOLEAN,
-          bpuic VARCHAR,
-          haltestellen_name VARCHAR,
-          ankunftszeit VARCHAR,
-          an_prognose VARCHAR,
-          an_prognose_status VARCHAR,
-          abfahrtszeit VARCHAR,
-          ab_prognose VARCHAR,
-          ab_prognose_status VARCHAR,
-          durchfahrt_tf BOOLEAN,
-          sloid VARCHAR
-      );
-
-  - id: copy_current_csv_to_staging
-    type: io.kestra.plugin.jdbc.postgresql.CopyIn
-    format: CSV
-    from: "{{ outputs.download_current_data.outputFiles['data/current_stop_events.csv'] }}"
-    table: "stg_stop_events"
-    header: true
-    delimiter: ";"
+  - id: download_data
+    type: "io.kestra.plugin.core.http.Download"
+    uri: https://data.opentransportdata.swiss/en/dataset/ist-daten-v2/permalink
 
   - id: ensure_fact_table_exists
     type: io.kestra.plugin.jdbc.postgresql.Queries
@@ -117,151 +53,39 @@ tasks:
             is_peak_hour BOOLEAN
         );
 
-  - id: fill_fact_table
-    type: io.kestra.plugin.jdbc.postgresql.Queries
-    sql: |
-        INSERT INTO fact_stop_events (
-            event_unique_id,
-            betriebstag,
-            fahrt_bezeichner,
-            betreiber_id,
-            betreiber_abk,
-            betreiber_name,
-            produkt_id,
-            linien_id,
-            linien_text,
-            umlauf_id,
-            verkehrsmittel_text,
-            zusatzfahrt_tf,
-            faellt_aus_tf,
-            bpuic,
-            haltestellen_name,
-            ankunftszeit,
-            an_prognose,
-            an_prognose_status,
-            abfahrtszeit,
-            ab_prognose,
-            ab_prognose_status,
-            durchfahrt_tf,
-            sloid,
-            delay_arrival_sec,
-            delay_departure_sec,
-            service_hour,
-            service_day_of_week,
-            is_peak_hour
-        )
-        WITH parsed AS (
-            SELECT
-                CONCAT_WS(
-                    '|',
-                    NULLIF(fahrt_bezeichner, ''),
-                    NULLIF(bpuic, ''),
-                    NULLIF(betriebstag, ''),
-                    NULLIF(ankunftszeit, ''),
-                    NULLIF(abfahrtszeit, '')
-                ) AS event_unique_id,
-                TO_DATE(NULLIF(betriebstag, ''), 'DD.MM.YYYY') AS betriebstag,
-                fahrt_bezeichner,
-                betreiber_id,
-                betreiber_abk,
-                betreiber_name,
-                produkt_id,
-                linien_id,
-                linien_text,
-                umlauf_id,
-                verkehrsmittel_text,
-                zusatzfahrt_tf,
-                faellt_aus_tf,
-                bpuic,
-                haltestellen_name,
-                TO_TIMESTAMP(NULLIF(ankunftszeit, ''), 'DD.MM.YYYY HH24:MI') AS ankunftszeit_ts,
-                TO_TIMESTAMP(NULLIF(an_prognose, ''), 'DD.MM.YYYY HH24:MI') AS an_prognose_ts,
-                an_prognose_status,
-                TO_TIMESTAMP(NULLIF(abfahrtszeit, ''), 'DD.MM.YYYY HH24:MI') AS abfahrtszeit_ts,
-                TO_TIMESTAMP(NULLIF(ab_prognose, ''), 'DD.MM.YYYY HH24:MI') AS ab_prognose_ts,
-                ab_prognose_status,
-                durchfahrt_tf,
-                sloid
-            FROM stg_stop_events
-        )
-        SELECT
-            event_unique_id,
-            betriebstag,
-            fahrt_bezeichner,
-            betreiber_id,
-            betreiber_abk,
-            betreiber_name,
-            produkt_id,
-            linien_id,
-            linien_text,
-            umlauf_id,
-            verkehrsmittel_text,
-            zusatzfahrt_tf,
-            faellt_aus_tf,
-            bpuic,
-            haltestellen_name,
-            ankunftszeit_ts,
-            an_prognose_ts,
-            an_prognose_status,
-            abfahrtszeit_ts,
-            ab_prognose_ts,
-            ab_prognose_status,
-            durchfahrt_tf,
-            sloid,
-            CASE
-                WHEN ankunftszeit_ts IS NOT NULL AND an_prognose_ts IS NOT NULL
-                THEN EXTRACT(EPOCH FROM (an_prognose_ts - ankunftszeit_ts))::INTEGER
-                ELSE NULL
-            END AS delay_arrival_sec,
-            CASE
-                WHEN abfahrtszeit_ts IS NOT NULL AND ab_prognose_ts IS NOT NULL
-                THEN EXTRACT(EPOCH FROM (ab_prognose_ts - abfahrtszeit_ts))::INTEGER
-                ELSE NULL
-            END AS delay_departure_sec,
-            CASE
-                WHEN ankunftszeit_ts IS NOT NULL
-                THEN EXTRACT(HOUR FROM ankunftszeit_ts)::SMALLINT
-                ELSE NULL
-            END AS service_hour,
-            CASE
-                WHEN ankunftszeit_ts IS NOT NULL
-                THEN EXTRACT(ISODOW FROM ankunftszeit_ts)::SMALLINT
-                ELSE NULL
-            END AS service_day_of_week,
-            CASE
-                WHEN ankunftszeit_ts IS NOT NULL
-                THEN EXTRACT(HOUR FROM ankunftszeit_ts) IN (7, 8, 9, 16, 17, 18)
-                ELSE NULL
-            END AS is_peak_hour
-        FROM parsed
-        ON CONFLICT (event_unique_id) DO NOTHING;
-
+  - id: elt_file
+    type: io.kestra.plugin.core.flow.Subflow
+    namespace: hslu
+    flowId: elt_file
+    wait: true
+    inputs:
+      file: "{{ outputs.download_data.uri }}"
+        
   - id: build_station_delay_daily
     type: io.kestra.plugin.jdbc.postgresql.Queries
     sql: |
-      DROP TABLE IF EXISTS station_delay_daily;
+        DROP TABLE IF EXISTS station_delay_daily;
 
-      CREATE TABLE station_delay_daily AS
-      SELECT
-          haltestellen_name,
-          DATE(ankunftszeit) AS service_date,
-          EXTRACT(ISODOW FROM ankunftszeit)::SMALLINT AS day_of_week,
-          COUNT(*) AS total_records,
-          COUNT(delay_arrival_sec) AS records_with_delay,
-          AVG(delay_arrival_sec)::DOUBLE PRECISION AS avg_delay_arrival_sec,
-          SUM(delay_arrival_sec)::BIGINT AS total_delay_seconds,
-          AVG(
-              CASE
-                  WHEN delay_arrival_sec > 0 THEN 1.0
-                  ELSE 0.0
-              END
-          )::DOUBLE PRECISION AS delay_percentage
-      FROM fact_stop_events
-      WHERE ankunftszeit IS NOT NULL
-      GROUP BY
-          haltestellen_name,
-          DATE(ankunftszeit),
-          EXTRACT(ISODOW FROM ankunftszeit);
+        CREATE TABLE station_delay_daily AS
+        SELECT
+            haltestellen_name,
+            betriebstag AS service_date,
+            EXTRACT(ISODOW FROM betriebstag)::SMALLINT AS day_of_week,
+            COUNT(*) AS total_records,
+            SUM(CASE WHEN delay_arrival_sec > 0 THEN 1 ELSE 0 END)::INTEGER AS records_with_delay,
+            AVG(delay_arrival_sec)::DOUBLE PRECISION AS avg_delay_seconds,
+            SUM(delay_arrival_sec)::BIGINT AS total_delay_seconds,
+            AVG(
+                CASE
+                    WHEN delay_arrival_sec > 0 THEN 1.0
+                    ELSE 0.0
+                END
+            )::DOUBLE PRECISION AS delay_percentage
+        FROM fact_stop_events
+        WHERE ankunftszeit IS NOT NULL
+        GROUP BY
+            haltestellen_name,
+            betriebstag;
 
   - id: purge_files
     type: io.kestra.plugin.core.storage.PurgeCurrentExecutionFiles

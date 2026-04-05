@@ -1,0 +1,194 @@
+id: elt_file
+namespace: hslu
+
+concurrency:
+  limit: 1
+
+inputs:
+  - id: file
+    type: STRING
+
+tasks:
+  - id: create_staging_table
+    type: io.kestra.plugin.jdbc.postgresql.Queries
+    sql: |
+      DROP TABLE IF EXISTS stg_stop_events;
+
+      CREATE TABLE stg_stop_events (
+          betriebstag VARCHAR,
+          fahrt_bezeichner VARCHAR,
+          betreiber_id VARCHAR,
+          betreiber_abk VARCHAR,
+          betreiber_name VARCHAR,
+          produkt_id VARCHAR,
+          linien_id VARCHAR,
+          linien_text VARCHAR,
+          umlauf_id VARCHAR,
+          verkehrsmittel_text VARCHAR,
+          zusatzfahrt_tf BOOLEAN,
+          faellt_aus_tf BOOLEAN,
+          bpuic VARCHAR,
+          haltestellen_name VARCHAR,
+          ankunftszeit VARCHAR,
+          an_prognose VARCHAR,
+          an_prognose_status VARCHAR,
+          abfahrtszeit VARCHAR,
+          ab_prognose VARCHAR,
+          ab_prognose_status VARCHAR,
+          durchfahrt_tf BOOLEAN,
+          sloid VARCHAR
+      );
+
+  - id: copy_csv_to_staging
+    type: io.kestra.plugin.jdbc.postgresql.CopyIn
+    format: CSV
+    from: "{{ inputs.file }}"
+    table: "stg_stop_events"
+    header: true
+    delimiter: ";"
+
+  - id: fill_fact_table
+    type: io.kestra.plugin.jdbc.postgresql.Queries
+    sql: |
+      BEGIN;
+
+      SET LOCAL synchronous_commit = OFF;
+
+      SET LOCAL work_mem = '512MB';
+
+      DELETE FROM fact_stop_events
+      WHERE betriebstag IN (
+          SELECT DISTINCT TO_DATE(NULLIF(betriebstag, ''), 'DD.MM.YYYY')
+          FROM stg_stop_events
+          WHERE betriebstag IS NOT NULL
+      );
+
+      INSERT INTO fact_stop_events (
+          event_unique_id,
+          betriebstag,
+          fahrt_bezeichner,
+          betreiber_id,
+          betreiber_abk,
+          betreiber_name,
+          produkt_id,
+          linien_id,
+          linien_text,
+          umlauf_id,
+          verkehrsmittel_text,
+          zusatzfahrt_tf,
+          faellt_aus_tf,
+          bpuic,
+          haltestellen_name,
+          ankunftszeit,
+          an_prognose,
+          an_prognose_status,
+          abfahrtszeit,
+          ab_prognose,
+          ab_prognose_status,
+          durchfahrt_tf,
+          sloid,
+          delay_arrival_sec,
+          delay_departure_sec,
+          service_hour,
+          service_day_of_week,
+          is_peak_hour
+      )
+      WITH parsed AS (
+          SELECT
+              CONCAT_WS(
+                  '|',
+                  NULLIF(fahrt_bezeichner, ''),
+                  NULLIF(bpuic, ''),
+                  NULLIF(betriebstag, ''),
+                  NULLIF(ankunftszeit, ''),
+                  NULLIF(abfahrtszeit, '')
+              ) AS event_unique_id,
+              TO_DATE(NULLIF(betriebstag, ''), 'DD.MM.YYYY') AS betriebstag,
+              fahrt_bezeichner,
+              betreiber_id,
+              betreiber_abk,
+              betreiber_name,
+              produkt_id,
+              linien_id,
+              linien_text,
+              umlauf_id,
+              verkehrsmittel_text,
+              zusatzfahrt_tf,
+              faellt_aus_tf,
+              bpuic,
+              haltestellen_name,
+              TO_TIMESTAMP(NULLIF(ankunftszeit, ''), 'DD.MM.YYYY HH24:MI') AS ankunftszeit_ts,
+              TO_TIMESTAMP(NULLIF(an_prognose, ''), 'DD.MM.YYYY HH24:MI') AS an_prognose_ts,
+              an_prognose_status,
+              TO_TIMESTAMP(NULLIF(abfahrtszeit, ''), 'DD.MM.YYYY HH24:MI') AS abfahrtszeit_ts,
+              TO_TIMESTAMP(NULLIF(ab_prognose, ''), 'DD.MM.YYYY HH24:MI') AS ab_prognose_ts,
+              ab_prognose_status,
+              durchfahrt_tf,
+              sloid
+          FROM stg_stop_events
+          WHERE LOWER(produkt_id) = 'zug'
+      ),
+      deduplicated AS (
+          SELECT *, ROW_NUMBER() OVER (PARTITION BY event_unique_id ORDER BY ankunftszeit_ts DESC) as row_num
+          FROM parsed
+      )
+      SELECT
+          event_unique_id,
+          betriebstag,
+          fahrt_bezeichner,
+          betreiber_id,
+          betreiber_abk,
+          betreiber_name,
+          produkt_id,
+          linien_id,
+          linien_text,
+          umlauf_id,
+          verkehrsmittel_text,
+          zusatzfahrt_tf,
+          faellt_aus_tf,
+          bpuic,
+          haltestellen_name,
+          ankunftszeit_ts,
+          an_prognose_ts,
+          an_prognose_status,
+          abfahrtszeit_ts,
+          ab_prognose_ts,
+          ab_prognose_status,
+          durchfahrt_tf,
+          sloid,
+          CASE
+              WHEN ankunftszeit_ts IS NOT NULL AND an_prognose_ts IS NOT NULL
+              THEN NULLIF(GREATEST(0, EXTRACT(EPOCH FROM (ankunftszeit_ts - an_prognose_ts))::INTEGER), 0)
+              ELSE NULL
+          END AS delay_arrival_sec,
+          CASE
+              WHEN abfahrtszeit_ts IS NOT NULL AND ab_prognose_ts IS NOT NULL
+              THEN NULLIF(GREATEST(0, EXTRACT(EPOCH FROM (abfahrtszeit_ts - ab_prognose_ts))::INTEGER), 0)
+              ELSE NULL
+          END AS delay_departure_sec,
+          CASE
+              WHEN ankunftszeit_ts IS NOT NULL
+              THEN EXTRACT(HOUR FROM ankunftszeit_ts)::SMALLINT
+              ELSE NULL
+          END AS service_hour,
+          CASE
+              WHEN ankunftszeit_ts IS NOT NULL
+              THEN EXTRACT(ISODOW FROM ankunftszeit_ts)::SMALLINT
+              ELSE NULL
+          END AS service_day_of_week,
+          CASE
+              WHEN ankunftszeit_ts IS NOT NULL
+              THEN EXTRACT(HOUR FROM ankunftszeit_ts) IN (7, 8, 9, 16, 17, 18)
+              ELSE NULL
+          END AS is_peak_hour
+      FROM deduplicated
+      WHERE row_num = 1;
+
+      COMMIT;
+
+pluginDefaults:
+  - type: io.kestra.plugin.jdbc.postgresql
+    values:
+      url: jdbc:postgresql://pgdatabase:5432/swiss_transport
+      username: root
+      password: root
