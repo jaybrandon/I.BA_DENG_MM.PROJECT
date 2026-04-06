@@ -1,100 +1,117 @@
-# 🚆 Swiss Public Transport Delay Pipeline
+# 🚆 Swiss Train Delay Data Pipeline
 
 **Data Engineering Project – I.BA_DENG_MM.F2601 (FS 2026)**
 
 ---
 
-## 📌 Project Overview
 
-This project was developed as part of the *Data Engineering course (I.BA_DENG_MM.F2601)* in Spring Semester 2026.
+## Overview
 
-The goal is to design and implement a **fully reproducible end-to-end batch data pipeline** using real-world data engineering tools and practices.
+This project implements an end-to-end batch data pipeline for analyzing delays in Swiss public transport, focusing exclusively on train operations.
 
-### 🔧 What the Pipeline Does
+The pipeline ingests raw operational data, processes it into structured tables, and provides aggregated delay metrics for downstream analysis.
 
-* Ingests raw transport data in batch mode
-* Stores data in a local PostgreSQL database
-* Transforms data into analysis-ready tables
-* Orchestrates workflows using Kestra
-* Runs fully reproducible via Docker Compose
+The system is fully containerized and orchestrated using Kestra, ensuring reproducibility and ease of use
 
 ---
 
-## 📊 Dataset
 
-* **Source:** Open Transport Data Switzerland
-* **URL:** [https://opentransportdata.swiss](https://opentransportdata.swiss)
-* **Type:** Public transport stop event data (arrivals, departures, delays)
+## Architecture
 
----
+The pipeline follows a batch ELT approach:
 
-## 👤 Use Case & Persona
+1. **Ingestion**
+   - Downloads raw data from Swiss Open Transport Data
 
-### **Transport Data Analyst**
+2. **Staging**
+   - Loads raw CSV data into a staging table
 
-| Aspect       | Description                                  |
-| ------------ | -------------------------------------------- |
-| **Goal**     | Analyze delays in Swiss public transport     |
-| **Problem**  | Raw data is large and difficult to query     |
-| **Solution** | Clean dataset + aggregated delay metrics     |
-| **Value**    | Identify delay hotspots & optimize transport |
+3. **Transformation**
+   - Filters to train-only records 
+   - Parses timestamps and normalizes schema  
+   - Computes delay metrics and derived features  
+   - Deduplicates records using a generated event key  
 
----
+4. **Final Tables**
+   - `fact_stop_events` (event-level data)
+   - `station_delay_daily` (aggregated metrics)
 
-## 🏗️ Architecture Overview
-
-```
-OpenTransportData
-        ↓
-Python Ingestion
-        ↓
-PostgreSQL (Staging)
-        ↓
-Transformation (SQL/Python)
-        ↓
-Analytics Tables
-        ↓
-Kestra Orchestration
-```
+5. **Orchestration**
+   - Managed via Kestra workflows and subflows  
 
 ---
 
-## 📁 Repository Structure
+
+## Dataset
+
+**Source:** Swiss Open Transport Data [https://opentransportdata.swiss](https://opentransportdata.swiss)
+
+**Scope:**
+- Only **train records** are processed  
+- Other transport modes are excluded during transformation  
+
+
+**Data includes:**
+- Identifiers (event, train, operator)
+- Station-level info
+- Timestamps (scheduled vs predicted)
+- Derived delay metrics
+---
+
+
+## Tech Stack
+
+- Python (data ingestion and transformation)
+- PostgreSQL (data storage)
+- pgAdmin (database interface)
+- Kestra (workflow orchestration)
+- Docker Compose (environment setup)
+
+---
+
+
+## Project Structure
 
 ```
 .
-├── src/
-│   ├── ingestion/        # Batch ingestion scripts
-│   ├── transformation/   # Transformation logic
-│   └── util/             # Database utilities
-│
+├── docker-compose.yml
 ├── kestra/
-│   └── workflows/        # Kestra workflows
-│
-├── notebooks/
-│   └── exploration.ipynb # Data exploration
-│
-├── docker-compose.yaml   # Full environment setup
-├── pyproject.toml        # Python dependencies
-└── README.md
+│ ├── ingest_current_workflow.yaml
+│ ├── backfill_workflow.yaml
+│ └── elt_file_workflow.yaml
+├── src/
+│ ├── ingestion/
+│ │ ├── ingest_current.py
+│ │ └── ingest_backfill.py
+│ ├── transformation/
+│ │ └── stop_event_transformation.py
+│ └── util/
+├── README.md
 ```
 
 ---
 
-## ⚙️ Prerequisites
 
-If you participated in the weekly course exercises, you should already have everything set up 😉
-Otherwise you need:
+## Prerequisites
+Ensure the following tools are installed on your system:
 
-* Docker + Docker Compose
-* Python (with `uv`)
+- **Docker** (including Docker Compose)
+
+### Notes
+
+- The pipeline is designed to run fully inside Docker.  
+- No local Python setup is required unless you want to execute scripts manually.
 
 ---
 
-## 🚀 Setup & Installation
+
+## Quick Start
+
+### 1. Clone the repository
 
 ```bash
 git clone https://github.com/jaybrandon/I.BA_DENG_MM.PROJECT.git
+
 cd I.BA_DENG_MM.PROJECT
 
 uv sync
@@ -103,55 +120,71 @@ uv venv
 # Activate environment
 source .venv/bin/activate   # Linux / Mac
 .venv\Scripts\activate      # Windows
+```
 
+---
+
+### 2. Start all services
+
+ ```bash
 docker compose up -d
 ```
 
 ---
 
-## 🌐 Services & Access
+### 3. Access services
 
-| Service | URL                                            | Description            |
-| ------- | ---------------------------------------------- | ---------------------- |
-| Kestra  | [http://localhost:8080](http://localhost:8080) | Workflow orchestration |
-| pgAdmin | [http://localhost:8085](http://localhost:8085) | Database UI            |
+- **Kestra UI:** http://localhost:8080  
+- **pgAdmin:** http://localhost:8085  
 
 ---
 
-## 🔄 Running the Pipeline
+### 4. Run the pipeline
 
-### 1. Open Kestra
+#### Option A: Ingest latest data
 
-```
-http://localhost:8080
-```
+1. Open Kestra UI  
+2. Navigate to flows  
+3. Execute: ingest_current_data
 
-### 2. Import Workflow
 
-* Navigate to **Flows**
-* Import from: `kestra/workflows/`
+#### Option B: Backfill historical data
 
-### 3. Execute Workflow
-
-**Recommended (fast):**
-
-* `ingest_current_workflow`
-
-**Alternative (slow):**
-
-* `backfill_workflow`
-
+1. Open Kestra UI  
+2. Navigate to flows  
+3. Execute: backfill_data  
+4. Provide:
+   - Month (MM)  
+   - Year  
 
 ---
 
-## 🗄️ Database Setup (pgAdmin)
+### 5. Verify results
+
+Connect to PostgreSQL via pgAdmin and check:
+
+- `fact_stop_events`
+- `station_delay_daily`
+
+How to connect to PostgreSQL will be discussed in the following section.
+
+---
+
+## Database Connection
 
 ### Login
 
 * Email: `admin@admin.com`
 * Password: `root`
 
+---
+
 ### Create Server Connection
+
+1. Click `Add new Server`
+2. Enter a Server-Name in the `General` tab
+3. Switch to the `Connection` tab and fill in the content of following table
+
 
 | Field    | Value           |
 | -------- | --------------- |
@@ -160,10 +193,20 @@ http://localhost:8080
 | Username | root            |
 | Password | root            |
 
-    Navigate to the tables: Servers -> Databases -> swiss_transport -> Schemas -> Tables
----
+4. Click `Save`
 
-## 📊 Data Model
+---
+### Verify Server Connection & Existence of tables
+
+Now a new Server should appear on the left hand side.
+
+You can check if the tables exist by clicking:
+
+```
+Servers -> <Your Server Name> -> swiss-transport -> schemas -> tables
+```
+
+There you should see:
 
 | Table                   | Description                  |
 | ----------------------- | ---------------------------- |
@@ -173,20 +216,23 @@ http://localhost:8080
 
 ---
 
-## 🔍 Example Queries
+## Example Queries
+
+Now you can click on the Query tool and explore the Data yourself
 
 ```sql
 -- Average delay per station starting with highest delay
 SELECT 
     haltestellen_name,
-    AVG(avg_delay_arrival_sec) AS avg_delay_seconds
+    AVG(avg_delay_seconds) AS avg_delay_seconds
 FROM station_delay_daily
-WHERE avg_delay_arrival_sec IS NOT NULL
+WHERE avg_delay_seconds IS NOT NULL
 GROUP BY haltestellen_name
 ORDER BY avg_delay_seconds DESC
 LIMIT 20;
 
 -- List Stations starting with a specific letter
+--You can use this to look for a station you want to use in the next Query
 SELECT DISTINCT haltestellen_name
 FROM station_delay_daily
 WHERE haltestellen_name ILIKE 'A%'   -- replace A with any letter
@@ -195,46 +241,27 @@ ORDER BY haltestellen_name;
 -- Analyze delays for your local station (replace 'Rotkreuz' with desired station to analyze)
 SELECT 
     service_date,
-    avg_delay_arrival_sec,
+    avg_delay_seconds,
     delay_percentage
 FROM station_delay_daily
 WHERE haltestellen_name ILIKE '%Rotkreuz%'
 ORDER BY service_date;
 ```
-
 ---
 
-## 🔁 Pipeline Behavior & Automation
+
+## Pipeline Behavior & Automation
 
 Once the setup is complete, the pipeline is ready for repeated execution.
 
-- The ingestion workflow is scheduled (via Kestra) to fetch new batch data every day  
+- The ingestion workflow is scheduled (via Kestra) to fetch new batch data every day at 2:00 am.
 - New data is appended and processed through the transformation pipeline  
 - Aggregated tables are refreshed to reflect the latest state  
 
-### ✅ Idempotency
-
-The pipeline is designed to be idempotent:
-
-- Running the pipeline multiple times does not create duplicates 
-- Existing data is safely refreshed or updated  
-- Transformations produce consistent results across runs  
-
-This ensures the system can run reliably in a production-like setting.
-
 ---
 
-## 🛠️ Troubleshooting
 
-| Issue                  | Solution                       |
-| ---------------------- | ------------------------------ |
-| Services not reachable | Wait after `docker compose up` |
-| DB connection issues   | Check hostname `pgdatabase`    |
-| Workflow issues        | Check Kestra logs              |
-
----
-
-## 🔮 Future Work
+## Future Work
 
 * Terraform (GCS + BigQuery)
 * Cloud ingestion pipeline
