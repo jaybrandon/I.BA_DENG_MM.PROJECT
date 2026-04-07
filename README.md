@@ -42,7 +42,7 @@ The pipeline follows a batch ELT approach:
 ---
 
 
-## Dataset
+## Dataset Overview
 
 **Source:** Swiss Open Transport Data [https://opentransportdata.swiss](https://opentransportdata.swiss)
 
@@ -51,11 +51,25 @@ The pipeline follows a batch ELT approach:
 - Other transport modes are excluded during transformation  
 
 
-**Data includes:**
-- Identifiers (event, train, operator)
-- Station-level info
-- Timestamps (scheduled vs predicted)
-- Derived delay metrics
+**Main Features**
+| Feature             | Description                                      |
+| ------------------- | ------------------------------------------------ |
+| BETRIEBSTAG         | Operating day of the trip (date of service)      |
+| FAHRT_BEZEICHNER    | Unique trip identifier (Trip ID)                 |
+| BETREIBER_NAME      | Name of the transport operator                   |
+| PRODUKT_ID          | Type of transport (e.g., train, bus)             |
+| LINIEN_ID           | Line identifier                                  |
+| LINIEN_TEXT         | Human-readable line name                         |
+| VERKEHRSMITTEL_TEXT | Transport mode (e.g., RE, S-Bahn)                |
+| HALTESTELLEN_NAME   | Name of the station/stop                         |
+| BPUIC               | Unique station identifier                        |
+| ANKUNFTSZEIT        | Scheduled arrival time                           |
+| AN_PROGNOSE         | Predicted/actual arrival time                    |
+| ABFAHRTSZEIT        | Scheduled departure time                         |
+| AB_PROGNOSE         | Predicted/actual departure time                  |
+| DURCHFAHRT_TF       | Indicates if the vehicle passes without stopping |
+| FAELLT_AUS_TF       | Indicates if the trip was cancelled              |
+
 ---
 
 
@@ -113,13 +127,6 @@ Ensure the following tools are installed on your system:
 git clone https://github.com/jaybrandon/I.BA_DENG_MM.PROJECT.git
 
 cd I.BA_DENG_MM.PROJECT
-
-uv sync
-uv venv
-
-# Activate environment
-source .venv/bin/activate   # Linux / Mac
-.venv\Scripts\activate      # Windows
 ```
 
 ---
@@ -159,60 +166,21 @@ docker compose up -d
 
 ---
 
-### 5. Verify results
+### 5. Connect to PostgreSQL (pgAdmin)
 
-Connect to PostgreSQL via pgAdmin and check:
-
-- `fact_stop_events`
-- `station_delay_daily`
-
-How to connect to PostgreSQL will be discussed in the following section.
-
----
-
-## Database Connection
-
-### Login
-
-* Email: `admin@admin.com`
-* Password: `root`
-
----
-
-### Create Server Connection
-
-1. Click `Add new Server`
-2. Enter a Server-Name in the `General` tab
-3. Switch to the `Connection` tab and fill in the content of following table
-
-
-| Field    | Value           |
-| -------- | --------------- |
-| Host     | pgdatabase      |
-| Port     | 5432            |
-| Username | root            |
-| Password | root            |
+1. Open pgAdmin: http://localhost:8085  
+2. Login:
+   - Email: admin@admin.com
+   - Password: root
+3. Create a new server:
+   - General → Name: (any name)
+   - Connection:
+     - Host: pgdatabase
+     - Port: 5432
+     - Username: root
+     - Password: root
 
 4. Click `Save`
-
----
-### Verify Server Connection & Existence of tables
-
-Now a new Server should appear on the left hand side.
-
-You can check if the tables exist by clicking:
-
-```
-Servers -> <Your Server Name> -> swiss-transport -> schemas -> tables
-```
-
-There you should see:
-
-| Table                   | Description                  |
-| ----------------------- | ---------------------------- |
-| **stg_stop_events**     | Raw staging data             |
-| **fact_stop_events**    | Cleaned & feature engineered |
-| **station_delay_daily** | Aggregated delay metrics     |
 
 ---
 
