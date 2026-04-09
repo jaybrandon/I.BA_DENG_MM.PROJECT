@@ -164,6 +164,8 @@ docker compose up -d
    - Month (MM)  
    - Year  
 
+Backfilling is useful when you want to load historical data for past months (e.g., for initial dataset creation, reprocessing, or analysis over longer time periods).
+
 ---
 
 ### 5. Connect to PostgreSQL (pgAdmin)
