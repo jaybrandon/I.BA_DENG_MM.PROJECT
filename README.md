@@ -47,6 +47,7 @@ The pipeline follows a batch ELT approach:
 **Source:** Swiss Open Transport Data [https://opentransportdata.swiss](https://opentransportdata.swiss)
 
 **Scope:**
+- Restricted to V2 data, which starts in 07.2025
 - Only **train records** are processed  
 - Other transport modes are excluded during transformation  
 
@@ -118,6 +119,23 @@ Ensure the following tools are installed on your system:
 
 ---
 
+## Configuration (Environment Variables)
+
+**PostgreSQL (Application DB)**
+- `POSTGRES_USER` – database user  
+- `POSTGRES_PASSWORD` – database password  
+- `POSTGRES_DB` – database name  
+
+**Kestra PostgreSQL (Metadata DB)**
+- `POSTGRES_DB` – Kestra database name  
+- `POSTGRES_USER` – Kestra user  
+- `POSTGRES_PASSWORD` – Kestra password  
+
+**Kestra**
+- `KESTRA_CONFIGURATION` – full Kestra configuration (DB, storage, queue, auth)  
+
+---
+
 
 ## Quick Start
 
@@ -156,6 +174,8 @@ docker compose up -d
 
 
 #### Option B: Backfill historical data
+
+⚠️ *As our pipeline handles only V2 data, the earliest data available is **07.2025***
 
 1. Open Kestra UI  
 2. Navigate to flows  
